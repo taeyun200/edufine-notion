@@ -126,6 +126,8 @@ td.dim{color:var(--muted)}
 tbody tr:last-child td{border-bottom:none}
 tbody tr:hover td{background:var(--surface-2)}
 th.pick,td.pick{width:1%; padding-right:0}
+/* CSV에 실리지 않는 열 — 화면에서만 참고로 본다 */
+th .note{font-weight:400; letter-spacing:0; text-transform:none; opacity:.55}
 td.pick input,th.pick input{accent-color:var(--accent); width:15px; height:15px; margin:0; display:block; cursor:pointer}
 tbody tr.off td{color:var(--muted); opacity:.5}
 tbody tr.off td.pick{opacity:1}
@@ -275,7 +277,10 @@ function parseBudget(rows) {
     }
     out.push({
       산출내역, 세부사업: 사업, 세부항목: 항목, 원가통계비목: label,
-      예산액: Math.round(+r[2] || 0), 집행액: Math.round(+r[3] || 0),
+      예산액: Math.round(+r[2] || 0),
+      // 집행액은 화면에서 참고용으로만 보여 주고 CSV에는 넣지 않는다.
+      // 노션에서는 지출DB를 롤업해 스스로 세므로, 값으로 받으면 두 숫자가 싸운다.
+      집행액: Math.round(+r[3] || 0),
     });
   }
   if (!out.length) throw new Error("데이터 줄이 없습니다. 세출예산집행현황목록이 맞는지 확인해 주세요.");
@@ -318,12 +323,13 @@ function parsePurchases(rows) {
 
 const GUIDE = {
   budget: [
-    ["노션에서 <code>가져오기 → CSV</code>를 눌러 내려받은 <code>세출예산DB.csv</code>를 선택합니다."],
-    ["속성 종류를 고칩니다. <code>예산액</code> <code>집행액</code>은 <b>숫자(원)</b>, <code>세부사업</code> <code>세부항목</code> <code>원가통계비목</code>은 <b>선택</b>으로."],
-    ["잔액과 집행률은 <b>값으로 받지 말고 수식으로 둡니다.</b> 값으로 넣으면 다음 달에 조용히 낡습니다.",
-     'prop("예산액") - prop("집행액")\nif(prop("예산액") == 0, 0, prop("집행액") / prop("예산액"))'],
-    ["<code>담당</code> 체크박스를 만들고 내 사업만 체크합니다. 홈에는 체크한 것만 띄웁니다."],
-    ["예산이 바뀌면 다시 내려받아 <b>같은 줄을 찾아 숫자만 갈아 끼웁니다.</b> <code>세부항목 + 원가통계비목 + 산출내역</code> 세 열이 그 열쇠라서 CSV에 다 들어 있습니다."],
+    ["노션에서 <code>가져오기 → CSV</code>로 <code>세출예산DB.csv</code>를 선택합니다. 안에는 <b>예산액만</b> 들어 있습니다."],
+    ["속성 종류를 고칩니다. <code>예산액</code>은 <b>숫자(원)</b>, <code>세부사업</code> <code>세부항목</code> <code>원가통계비목</code>은 <b>선택</b>으로."],
+    ["지출DB를 만들어 <b>관계형</b>으로 이어 붙입니다. 여기서부터는 노션이 셉니다.",
+     '지출액   ROLLUP(지출, 지출금액, 합계)\n잔액     prop("예산액") - prop("지출액")\n집행률   if(prop("예산액") == 0, 0, prop("지출액") / prop("예산액"))'],
+    ["여기까지가 준비입니다. <b>3월에 예산을 한 번 넣고, 그 뒤로는 지출만 적습니다.</b> 잔액은 저절로 줄어듭니다."],
+    ["추경으로 배정이 바뀌었을 때만 이 화면을 다시 열어 <code>예산액</code>을 고칩니다. 줄을 다시 찾는 열쇠가 <code>세부항목 + 원가통계비목 + 산출내역</code>이라 세 열이 CSV에 다 들어 있습니다."],
+    ["<code>집행액</code>은 화면에만 있고 CSV에는 넣지 않습니다. 노션이 지출DB로 이미 세고 있어서, 값으로 넣으면 두 숫자가 서로 다투게 됩니다."],
   ],
   purchase: [
     ["노션에서 <code>가져오기 → CSV</code>로 <code>품의DB.csv</code>를 가져옵니다."],
@@ -419,7 +425,8 @@ function paint() {
 
   const allOn = view.length > 0 && view.every((i) => SEL.has(i));
   $("thead").innerHTML = `<tr><th class="pick"><input type="checkbox" id="allbox" ${allOn ? "checked" : ""} title="보이는 줄 모두"></th>${
-    cols.map((c) => `<th${numeric.has(c) ? ' style="text-align:right"' : ""}>${c}</th>`).join("")}</tr>`;
+    cols.map((c) => `<th${numeric.has(c) ? ' style="text-align:right"' : ""}>${c}${
+      CSV_SKIP.has(c) ? ' <span class="note">참고</span>' : ""}</th>`).join("")}</tr>`;
 
   let prev = null;
   $("tbody").innerHTML = view.map((i) => {
@@ -467,10 +474,13 @@ function paint() {
     `<li>${t}${fx ? `<span class="fx">${esc(fx)}</span>` : ""}</li>`).join("");
 }
 
+// 노션이 스스로 세는 값은 내보내지 않는다. 값으로 넘기면 그 순간부터 낡기 시작한다.
+const CSV_SKIP = new Set(["집행액"]);
+
 $("dl").addEventListener("click", () => {
   const rows = picked();
   if (!rows.length) return;
-  const cols = Object.keys(rows[0]);
+  const cols = Object.keys(rows[0]).filter((c) => !CSV_SKIP.has(c));
   const cell = (v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   const csv = [cols.join(","), ...rows.map((r) => cols.map((c) => cell(r[c])).join(","))].join("\r\n");
   // BOM을 붙여야 노션도 엑셀도 한글을 깨뜨리지 않는다
