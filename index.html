@@ -221,6 +221,7 @@ button.go.ghost:hover:not(:disabled){background:var(--accent-soft); filter:none}
     <span class="say" id="say">아직 파일을 열지 않았습니다.</span>
     <button class="go ghost hide" id="dl2" disabled>기집행 지출 내려받기</button>
     <button class="go" id="dl" disabled>CSV 내려받기</button>
+    <!-- 두 버튼 다 CSV라서, 어느 쪽이 무엇인지는 이름으로만 갈린다. paint()에서 파일 종류에 맞춰 붙인다. -->
   </div>
 </div>
 
@@ -326,12 +327,12 @@ function parsePurchases(rows) {
 
 const GUIDE = {
   budget: [
-    ["노션에서 <code>가져오기 → CSV</code>로 <code>세출예산DB.csv</code>를 선택합니다. 안에는 <b>예산액만</b> 들어 있습니다."],
+    ["<code>세출예산(업무담당) CSV 내려받기</code>를 누르면 <code>세출예산DB.csv</code>가 저장됩니다. 위에서 고른 <b>내가 맡은 줄</b>만, <b>예산액만</b> 들어 있습니다. 노션에서 <code>가져오기 → CSV</code>로 불러옵니다."],
     ["속성 종류를 고칩니다. <code>예산액</code>은 <b>숫자(원)</b>, <code>세부사업</code> <code>세부항목</code> <code>원가통계비목</code>은 <b>선택</b>으로."],
     ["지출DB를 만들어 <b>관계형</b>으로 이어 붙입니다. 여기서부터는 노션이 셉니다.",
      '지출액   ROLLUP(지출, 지출금액, 합계)\n잔액     prop("예산액") - prop("지출액")\n집행률   if(prop("예산액") == 0, 0, prop("지출액") / prop("예산액"))'],
     ["여기까지가 준비입니다. <b>3월에 예산을 한 번 넣고, 그 뒤로는 지출만 적습니다.</b> 잔액은 저절로 줄어듭니다."],
-    ["<b>연중에 시작하셨다면</b> — 이미 나간 돈이 있으니 <code>기집행 N줄 내려받기</code>로 <code>지출DB_기집행.csv</code>를 받아 지출DB에 가져오세요. 산출내역별로 한 줄씩 세워 줍니다. 가져온 뒤 <code>산출내역</code> 열을 보고 <code>예산항목</code> 관계형만 이어 주면 그때부터 잔액이 맞습니다.<br>넣은 줄은 <code>지출종류 = 기집행소급</code>이라 나중에 개별 영수증 내역이 확인되면 한 번에 골라 지울 수 있습니다."],
+    ["<b>연중에 시작하셨다면</b> — 이미 나간 돈이 있으니 <code>기집행 지출 N줄 내려받기</code>로 <code>지출DB_기집행.csv</code>를 받아 지출DB에 가져오세요. 산출내역별로 한 줄씩 세워 줍니다. 가져온 뒤 <code>산출내역</code> 열을 보고 <code>예산항목</code> 관계형만 이어 주면 그때부터 잔액이 맞습니다.<br>넣은 줄은 <code>지출종류 = 기집행소급</code>이라 나중에 개별 영수증 내역이 확인되면 한 번에 골라 지울 수 있습니다."],
     ["추경으로 배정이 바뀌었을 때만 이 화면을 다시 열어 <code>예산액</code>을 고칩니다. 줄을 다시 찾는 열쇠가 <code>세부항목 + 원가통계비목 + 산출내역</code>이라 세 열이 CSV에 다 들어 있습니다."],
     ["<code>집행액</code>은 화면에만 있고 CSV에는 넣지 않습니다. 노션이 지출DB로 이미 세고 있어서, 값으로 넣으면 두 숫자가 서로 다투게 됩니다."],
   ],
@@ -470,10 +471,11 @@ function paint() {
     : `고른 ${rows.length}건 · 품의금액 ${won(sum("품의금액"))}원`;
 
   $("dl").disabled = !rows.length;
+  $("dl").textContent = budget ? "세출예산(업무담당) CSV 내려받기" : "품의 CSV 내려받기";
   const 소급 = budget ? rows.filter((r) => r.집행액 > 0).length : 0;
   $("dl2").classList.toggle("hide", !소급);
   $("dl2").disabled = !소급;
-  $("dl2").textContent = `기집행 ${소급}줄 내려받기`;
+  $("dl2").textContent = `기집행 지출 ${소급}줄 내려받기`;
   $("say").innerHTML = rows.length
     ? `<b>${rows.length}</b>줄 · ${budget ? "세출예산DB.csv" : "품의DB.csv"}`
     : "고른 줄이 없습니다.";
