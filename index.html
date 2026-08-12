@@ -163,6 +163,8 @@ button.go{
 button.go:hover:not(:disabled){filter:brightness(1.1)}
 button.go:disabled{opacity:.4; cursor:not-allowed}
 button.go:focus-visible{outline:2px solid var(--accent); outline-offset:3px}
+button.go.ghost{background:transparent; color:var(--accent)}
+button.go.ghost:hover:not(:disabled){background:var(--accent-soft); filter:none}
 .toggle{display:inline-flex; align-items:center; gap:7px; font-size:13.5px; color:var(--muted); cursor:pointer}
 .toggle input{accent-color:var(--accent); width:15px; height:15px; margin:0}
 
@@ -217,6 +219,7 @@ button.go:focus-visible{outline:2px solid var(--accent); outline-offset:3px}
   <div class="in">
     <label class="toggle" id="zerowrap"><input type="checkbox" id="zero"> 예산액 0원인 줄도 포함</label>
     <span class="say" id="say">아직 파일을 열지 않았습니다.</span>
+    <button class="go ghost hide" id="dl2" disabled>기집행 지출 내려받기</button>
     <button class="go" id="dl" disabled>CSV 내려받기</button>
   </div>
 </div>
@@ -328,6 +331,7 @@ const GUIDE = {
     ["지출DB를 만들어 <b>관계형</b>으로 이어 붙입니다. 여기서부터는 노션이 셉니다.",
      '지출액   ROLLUP(지출, 지출금액, 합계)\n잔액     prop("예산액") - prop("지출액")\n집행률   if(prop("예산액") == 0, 0, prop("지출액") / prop("예산액"))'],
     ["여기까지가 준비입니다. <b>3월에 예산을 한 번 넣고, 그 뒤로는 지출만 적습니다.</b> 잔액은 저절로 줄어듭니다."],
+    ["<b>연중에 시작하셨다면</b> — 이미 나간 돈이 있으니 <code>기집행 N줄 내려받기</code>로 <code>지출DB_기집행.csv</code>를 받아 지출DB에 가져오세요. 산출내역별로 한 줄씩 세워 줍니다. 가져온 뒤 <code>산출내역</code> 열을 보고 <code>예산항목</code> 관계형만 이어 주면 그때부터 잔액이 맞습니다.<br>넣은 줄은 <code>지출종류 = 기집행소급</code>이라 나중에 개별 영수증 내역이 확인되면 한 번에 골라 지울 수 있습니다."],
     ["추경으로 배정이 바뀌었을 때만 이 화면을 다시 열어 <code>예산액</code>을 고칩니다. 줄을 다시 찾는 열쇠가 <code>세부항목 + 원가통계비목 + 산출내역</code>이라 세 열이 CSV에 다 들어 있습니다."],
     ["<code>집행액</code>은 화면에만 있고 CSV에는 넣지 않습니다. 노션이 지출DB로 이미 세고 있어서, 값으로 넣으면 두 숫자가 서로 다투게 됩니다."],
   ],
@@ -466,6 +470,10 @@ function paint() {
     : `고른 ${rows.length}건 · 품의금액 ${won(sum("품의금액"))}원`;
 
   $("dl").disabled = !rows.length;
+  const 소급 = budget ? rows.filter((r) => r.집행액 > 0).length : 0;
+  $("dl2").classList.toggle("hide", !소급);
+  $("dl2").disabled = !소급;
+  $("dl2").textContent = `기집행 ${소급}줄 내려받기`;
   $("say").innerHTML = rows.length
     ? `<b>${rows.length}</b>줄 · ${budget ? "세출예산DB.csv" : "품의DB.csv"}`
     : "고른 줄이 없습니다.";
@@ -477,19 +485,38 @@ function paint() {
 // 노션이 스스로 세는 값은 내보내지 않는다. 값으로 넘기면 그 순간부터 낡기 시작한다.
 const CSV_SKIP = new Set(["집행액"]);
 
-$("dl").addEventListener("click", () => {
-  const rows = picked();
-  if (!rows.length) return;
+function saveCsv(rows, name) {
   const cols = Object.keys(rows[0]).filter((c) => !CSV_SKIP.has(c));
   const cell = (v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
   const csv = [cols.join(","), ...rows.map((r) => cols.map((c) => cell(r[c])).join(","))].join("\r\n");
   // BOM을 붙여야 노션도 엑셀도 한글을 깨뜨리지 않는다
   const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
-  const a = Object.assign(document.createElement("a"), {
-    href: url, download: DATA.kind === "budget" ? "세출예산DB.csv" : "품의DB.csv",
-  });
-  a.click();
+  Object.assign(document.createElement("a"), { href: url, download: name }).click();
   URL.revokeObjectURL(url);
+}
+
+// 연중에 시작하는 사람을 위한 것. 이미 나간 돈을 지출DB에 한 줄씩 세워 두어야
+// 잔액이 오늘부터 맞는다. 3월에 시작하면 집행액이 전부 0이라 이 버튼은 뜨지 않는다.
+function 기집행(rows) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const 오늘 = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return rows.filter((r) => r.집행액 > 0).map((r) => ({
+    지출내용: `[기집행] ${r.산출내역}`,
+    지출금액: r.집행액,
+    지출일: 오늘,
+    지출종류: "기집행소급",
+    산출내역: r.산출내역,   // 가져온 뒤 「예산항목」 관계형을 이 이름으로 이어 준다
+  }));
+}
+
+$("dl").addEventListener("click", () => {
+  const rows = picked();
+  if (rows.length) saveCsv(rows, DATA.kind === "budget" ? "세출예산DB.csv" : "품의DB.csv");
+});
+$("dl2").addEventListener("click", () => {
+  const rows = 기집행(picked());
+  if (rows.length) saveCsv(rows, "지출DB_기집행.csv");
 });
 
 $("toggleAll").addEventListener("click", () => {
