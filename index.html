@@ -113,18 +113,25 @@ header p{margin:2px 0 0; color:var(--muted); max-width:62ch}
 .node.lv2{padding-left:36px; color:var(--muted)}
 .node.lv2 .nm{color:var(--ink)}
 
-/* ── 미리보기 표 ────────────────────────── */
-.scroll{overflow-x:auto}
+/* ── 줄 고르는 표 ───────────────────────── */
+.scroll{overflow:auto; max-height:min(62vh,600px)}
 table{border-collapse:collapse; width:100%; font-size:13px}
 th,td{padding:8px 12px; text-align:left; border-bottom:1px solid var(--rule); white-space:nowrap}
 th{
   font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted);
-  font-weight:700; background:var(--surface-2); position:sticky; top:0;
+  font-weight:700; background:var(--surface-2); position:sticky; top:0; z-index:1;
 }
 td.n{font-family:var(--font-num); font-variant-numeric:tabular-nums; text-align:right}
 td.dim{color:var(--muted)}
 tbody tr:last-child td{border-bottom:none}
 tbody tr:hover td{background:var(--surface-2)}
+th.pick,td.pick{width:1%; padding-right:0}
+td.pick input,th.pick input{accent-color:var(--accent); width:15px; height:15px; margin:0; display:block; cursor:pointer}
+tbody tr.off td{color:var(--muted); opacity:.5}
+tbody tr.off td.pick{opacity:1}
+/* 같은 세부항목이 이어지는 동안은 위쪽 실선을 지워 한 덩어리로 읽히게 한다 */
+tbody tr.same td{border-bottom-color:transparent}
+tbody tr.head td{border-top:1px solid var(--rule)}
 .more{padding:11px 12px; font-size:12.5px; color:var(--muted); border-top:1px solid var(--rule); background:var(--surface-2)}
 
 /* ── 안내 ───────────────────────────────── */
@@ -184,13 +191,13 @@ button.go:focus-visible{outline:2px solid var(--accent); outline-offset:3px}
 
     <div class="cols">
       <div class="panel" id="treepanel">
-        <h2>가져올 사업 고르기 <button class="linkbtn" id="toggleAll">전체 해제</button></h2>
+        <h2>사업 단위로 한번에 <button class="linkbtn" id="toggleAll">전체 해제</button></h2>
         <div class="tree" id="tree"></div>
       </div>
 
       <div style="display:flex; flex-direction:column; gap:24px; min-width:0">
         <div class="panel">
-          <h2>미리보기</h2>
+          <h2>가져올 줄 고르기 <span id="picked"></span></h2>
           <div class="scroll"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
           <div class="more" id="more"></div>
         </div>
@@ -326,7 +333,11 @@ const GUIDE = {
   ],
 };
 
+// 고르기의 기준은 줄이다. 트리는 여러 줄을 한번에 켜고 끄는 손잡이일 뿐.
+// 진학역량강화사업 아래 1·2·3학년 상담처럼, 같은 사업 안에서도 내 몫은 한 줄뿐인 경우가 많다.
 let DATA = null;
+let SEL = new Set();      // 고른 줄 번호
+let NODES = [];           // 트리 마디 — {lv, name, idx:[줄 번호…]}
 
 function render() {
   if (!DATA) return;
@@ -361,72 +372,96 @@ function render() {
        <div class="stat"><dt>원인행위금액</dt><dd>${won(sum("원인행위금액"))}<small>원</small></dd></div>
        <div class="stat"><dt>불용</dt><dd>${won(sum("품의금액") - sum("원인행위금액"))}<small>원</small></dd></div>`;
 
-  // 사업 트리 — 세부사업 아래 세부항목. 실제 계층이라서 접기가 아니라 고르기로 쓴다.
-  const tree = $("tree");
+  // 트리는 세부사업 → 세부항목 두 단. 산출내역은 표에서 줄마다 고른다.
   $("treepanel").classList.toggle("hide", !budget);
   $("zerowrap").classList.toggle("hide", !budget);
+  NODES = [];
   if (budget) {
     const 사업들 = new Map();
-    for (const r of rows) {
+    rows.forEach((r, i) => {
       if (!사업들.has(r.세부사업)) 사업들.set(r.세부사업, new Map());
       const m = 사업들.get(r.세부사업);
-      m.set(r.세부항목, (m.get(r.세부항목) || 0) + r.예산액);
-    }
-    tree.innerHTML = "";
+      if (!m.has(r.세부항목)) m.set(r.세부항목, []);
+      m.get(r.세부항목).push(i);
+    });
     for (const [사업, 항목들] of 사업들) {
-      const total = [...항목들.values()].reduce((a, b) => a + b, 0);
-      tree.insertAdjacentHTML("beforeend", row("lv1", 사업, "", total));
-      for (const [항목, amt] of 항목들) tree.insertAdjacentHTML("beforeend", row("lv2", 항목, 사업, amt));
+      NODES.push({ lv: 1, name: 사업, idx: [].concat(...항목들.values()) });
+      for (const [항목, idx] of 항목들) NODES.push({ lv: 2, name: 항목, idx });
     }
-    tree.querySelectorAll("input").forEach((i) => i.addEventListener("change", onPick));
+    $("tree").innerHTML = NODES.map((n, k) => `<label class="node lv${n.lv}">
+      <input type="checkbox" data-node="${k}"><span class="nm">${esc(n.name)}</span>
+      <span class="amt">${won(n.idx.reduce((s, i) => s + rows[i].예산액, 0))}</span></label>`).join("");
+    $("tree").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+      for (const i of NODES[box.dataset.node].idx) box.checked ? SEL.add(i) : SEL.delete(i);
+      paint();
+    }));
   }
   paint();
 }
 
-function row(cls, name, parent, amt) {
-  return `<label class="node ${cls}">
-    <input type="checkbox" checked data-name="${esc(name)}" data-parent="${esc(parent)}" data-lv="${cls}">
-    <span class="nm">${esc(name)}</span><span class="amt">${won(amt)}</span></label>`;
-}
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-function onPick(e) {
-  const box = e.target;
-  if (box.dataset.lv === "lv1") {   // 사업을 끄면 딸린 항목도 함께 꺼진다
-    $("tree").querySelectorAll(`input[data-parent="${CSS.escape(box.dataset.name)}"]`)
-      .forEach((c) => { c.checked = box.checked; });
-  } else {                          // 항목이 하나라도 켜져 있으면 사업도 켠다
-    const p = $("tree").querySelector(`input[data-lv="lv1"][data-name="${CSS.escape(box.dataset.parent)}"]`);
-    const kids = [...$("tree").querySelectorAll(`input[data-parent="${CSS.escape(box.dataset.parent)}"]`)];
-    if (p) p.checked = kids.some((c) => c.checked);
-  }
-  paint();
-}
-
-function picked() {
+// 0원 줄을 감춘 채로 고른 상태가 남아 있으면 보이지 않는 줄이 CSV에 섞인다. 보이는 것만 내보낸다.
+function shown() {
   if (!DATA) return [];
-  if (DATA.kind !== "budget") return DATA.rows;
-  const on = new Set([...$("tree").querySelectorAll('input[data-lv="lv2"]:checked')].map((i) => i.dataset.name));
-  return DATA.rows.filter((r) => on.has(r.세부항목) && (($("zero").checked) || r.예산액 > 0));
+  const all = DATA.rows.map((_, i) => i);
+  return DATA.kind === "budget" && !$("zero").checked ? all.filter((i) => DATA.rows[i].예산액 > 0) : all;
 }
+const pickedIdx = () => shown().filter((i) => SEL.has(i));
+const picked = () => pickedIdx().map((i) => DATA.rows[i]);
 
 function paint() {
-  const rows = picked();
-  const cols = rows.length ? Object.keys(rows[0]) : [];
+  const view = shown();
+  const cols = Object.keys(DATA.rows[0]);
   const numeric = new Set(["예산액", "집행액", "품의금액", "원인행위금액"]);
   const lead = new Set(["산출내역", "품의번호", "제목"]);   // 나머지 열은 흐리게 — 눈이 제목 열을 먼저 잡게
-  $("thead").innerHTML = `<tr>${cols.map((c) => `<th${numeric.has(c) ? ' style="text-align:right"' : ""}>${c}</th>`).join("")}</tr>`;
-  $("tbody").innerHTML = rows.slice(0, 12).map((r) =>
-    `<tr>${cols.map((c) => numeric.has(c)
-      ? `<td class="n">${won(r[c])}</td>`
-      : `<td${lead.has(c) ? "" : ' class="dim"'}>${esc(r[c])}</td>`).join("")}</tr>`).join("");
-  $("more").textContent = rows.length > 12 ? `아래로 ${rows.length - 12}줄 더 있습니다. CSV에는 ${rows.length}줄 전부 들어갑니다.` : `${rows.length}줄 전부입니다.`;
+  const budget = DATA.kind === "budget";
 
-  const dl = $("dl");
-  dl.disabled = !rows.length;
+  const allOn = view.length > 0 && view.every((i) => SEL.has(i));
+  $("thead").innerHTML = `<tr><th class="pick"><input type="checkbox" id="allbox" ${allOn ? "checked" : ""} title="보이는 줄 모두"></th>${
+    cols.map((c) => `<th${numeric.has(c) ? ' style="text-align:right"' : ""}>${c}</th>`).join("")}</tr>`;
+
+  let prev = null;
+  $("tbody").innerHTML = view.map((i) => {
+    const r = DATA.rows[i], on = SEL.has(i);
+    const head = budget && r.세부항목 !== prev;                 // 세부항목이 바뀌는 줄에만 구분선
+    if (budget) prev = r.세부항목;
+    return `<tr class="${on ? "" : "off"} ${head ? "head" : "same"}">
+      <td class="pick"><input type="checkbox" data-i="${i}" ${on ? "checked" : ""}></td>${
+      cols.map((c) => numeric.has(c)
+        ? `<td class="n">${won(r[c])}</td>`
+        : `<td${lead.has(c) ? "" : ' class="dim"'}>${esc(r[c])}</td>`).join("")}</tr>`;
+  }).join("");
+
+  $("tbody").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+    box.checked ? SEL.add(+box.dataset.i) : SEL.delete(+box.dataset.i);
+    paint();
+  }));
+  $("allbox").addEventListener("change", (e) => {
+    for (const i of view) e.target.checked ? SEL.add(i) : SEL.delete(i);
+    paint();
+  });
+
+  // 트리 표시 — 딸린 줄이 전부 켜졌으면 체크, 일부만이면 중간 상태
+  const inView = new Set(view);
+  $("tree").querySelectorAll("input").forEach((box) => {
+    const idx = NODES[box.dataset.node].idx.filter((i) => inView.has(i));
+    const n = idx.filter((i) => SEL.has(i)).length;
+    box.checked = idx.length > 0 && n === idx.length;
+    box.indeterminate = n > 0 && n < idx.length;
+  });
+
+  const rows = picked();
+  const sum = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
+  $("picked").textContent = `${rows.length} / ${view.length}줄`;
+  $("more").textContent = budget
+    ? `고른 ${rows.length}줄 · 예산액 ${won(sum("예산액"))}원 · 집행액 ${won(sum("집행액"))}원 · 잔액 ${won(sum("예산액") - sum("집행액"))}원`
+    : `고른 ${rows.length}건 · 품의금액 ${won(sum("품의금액"))}원`;
+
+  $("dl").disabled = !rows.length;
   $("say").innerHTML = rows.length
-    ? `<b>${rows.length}</b>줄 · ${DATA.kind === "budget" ? "세출예산DB.csv" : "품의DB.csv"}`
-    : "고른 사업이 없습니다.";
+    ? `<b>${rows.length}</b>줄 · ${budget ? "세출예산DB.csv" : "품의DB.csv"}`
+    : "고른 줄이 없습니다.";
 
   $("guide").innerHTML = GUIDE[DATA.kind].map(([t, fx]) =>
     `<li>${t}${fx ? `<span class="fx">${esc(fx)}</span>` : ""}</li>`).join("");
@@ -448,13 +483,18 @@ $("dl").addEventListener("click", () => {
 });
 
 $("toggleAll").addEventListener("click", () => {
-  const boxes = [...$("tree").querySelectorAll("input")];
-  const off = boxes.some((b) => b.checked);
-  boxes.forEach((b) => { b.checked = !off; });
-  $("toggleAll").textContent = off ? "전체 선택" : "전체 해제";
+  const view = shown();
+  const any = view.some((i) => SEL.has(i));
+  view.forEach((i) => any ? SEL.delete(i) : SEL.add(i));
+  $("toggleAll").textContent = any ? "전체 선택" : "전체 해제";
   paint();
 });
-$("zero").addEventListener("change", paint);
+$("zero").addEventListener("change", () => {
+  // 감춘 줄은 고른 상태를 들고 있지 않게 한다. 그렇지 않으면 화면에 없던 줄이 CSV에 섞이고,
+  // 다시 켰을 때 고른 적 없는 줄이 체크된 채로 나타난다. 드러난 0원 줄은 꺼진 상태에서 시작한다.
+  if (!$("zero").checked) DATA.rows.forEach((r, i) => { if (r.예산액 === 0) SEL.delete(i); });
+  paint();
+});
 
 function load(file) {
   $("err").classList.add("hide");
@@ -467,6 +507,7 @@ function load(file) {
       const isPurchase = rows.some((r) => r.some((c) => String(c || "").trim() === "품의번호"));
       DATA = isPurchase ? parsePurchases(rows) : parseBudget(rows);
       $("out").classList.remove("hide");
+      SEL = new Set(shown());                      // 처음엔 보이는 줄 전부 고른 상태에서 빼 나간다
       $("toggleAll").textContent = "전체 해제";
       render();
     } catch (e) {
